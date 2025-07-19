@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RealSense Synchronized Streaming</title>
+    <title>RealSense Grid Streaming</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -13,7 +13,7 @@
         }
         
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
         }
         
@@ -22,25 +22,36 @@
             color: #333;
         }
         
-        .cameras-container {
-            display: flex;
-            justify-content: space-around;
+        .camera-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
             gap: 20px;
-            margin-bottom: 20px;
+            margin-bottom: 30px;
         }
         
-        .camera-box {
+        .camera-row {
+            display: contents;
+        }
+        
+        .camera-cell {
             background: white;
             border-radius: 10px;
-            padding: 20px;
+            padding: 15px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            flex: 1;
+            text-align: center;
         }
         
-        .camera-box h2 {
+        .camera-cell h3 {
             margin-top: 0;
-            text-align: center;
+            margin-bottom: 10px;
             color: #555;
+            font-size: 16px;
+        }
+        
+        .camera-label {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 5px;
         }
         
         canvas {
@@ -118,22 +129,20 @@
             border-radius: 5px;
             margin-top: 20px;
         }
+        
+        .camera-info {
+            font-size: 11px;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>RealSense D435 Synchronized Streaming</h1>
+        <h1>RealSense Multi-Camera Grid (RGB + Depth)</h1>
         
-        <div class="cameras-container">
-            <div class="camera-box">
-                <h2>Camera 1</h2>
-                <canvas id="canvas1"></canvas>
-            </div>
-            
-            <div class="camera-box">
-                <h2>Camera 2</h2>
-                <canvas id="canvas2"></canvas>
-            </div>
+        <div id="cameraGrid" class="camera-grid">
+            <!-- Camera cells will be dynamically generated -->
         </div>
         
         <div class="controls">
@@ -142,6 +151,7 @@
         
         <div class="status">
             <p>Status: <span id="connectionStatus">Connecting...</span></p>
+            <p>Cameras: <span id="cameraCount">0</span></p>
             <p>Sync Status: <span id="syncStatus">--</span> <span id="syncIndicator" class="sync-indicator"></span></p>
             <p>Recording: <span id="recordingStatus">Not Recording</span></p>
         </div>
@@ -150,26 +160,62 @@
     </div>
     
     <script>
-        const canvas1 = document.getElementById('canvas1');
-        const canvas2 = document.getElementById('canvas2');
-        const ctx1 = canvas1.getContext('2d');
-        const ctx2 = canvas2.getContext('2d');
         const recordBtn = document.getElementById('recordBtn');
         const connectionStatus = document.getElementById('connectionStatus');
+        const cameraCount = document.getElementById('cameraCount');
         const syncStatus = document.getElementById('syncStatus');
         const syncIndicator = document.getElementById('syncIndicator');
         const recordingStatus = document.getElementById('recordingStatus');
         const errorDiv = document.getElementById('error');
+        const cameraGrid = document.getElementById('cameraGrid');
         
         let ws = null;
         let isRecording = false;
         let reconnectInterval = null;
+        let cameras = [];
+        let canvases = {};
+        let contexts = {};
         
-        // Set canvas sizes
-        canvas1.width = 640;
-        canvas1.height = 480;
-        canvas2.width = 640;
-        canvas2.height = 480;
+        function createCameraGrid(numCameras) {
+            // Clear existing grid
+            cameraGrid.innerHTML = '';
+            canvases = {};
+            contexts = {};
+            
+            // Create grid for each camera (2 columns: RGB + Depth)
+            for (let i = 0; i < numCameras; i++) {
+                // RGB column
+                const rgbCell = document.createElement('div');
+                rgbCell.className = 'camera-cell';
+                rgbCell.innerHTML = `
+                    <h3>Camera ${i + 1} - RGB</h3>
+                    <div class="camera-label">Color Stream</div>
+                    <canvas id="canvas_${i}_rgb" width="640" height="480"></canvas>
+                    <div class="camera-info" id="info_${i}"></div>
+                `;
+                
+                // Depth column
+                const depthCell = document.createElement('div');
+                depthCell.className = 'camera-cell';
+                depthCell.innerHTML = `
+                    <h3>Camera ${i + 1} - Depth</h3>
+                    <div class="camera-label">Depth Stream</div>
+                    <canvas id="canvas_${i}_depth" width="640" height="480"></canvas>
+                `;
+                
+                cameraGrid.appendChild(rgbCell);
+                cameraGrid.appendChild(depthCell);
+                
+                // Store canvas references
+                const rgbCanvas = document.getElementById(`canvas_${i}_rgb`);
+                const depthCanvas = document.getElementById(`canvas_${i}_depth`);
+                
+                canvases[`${i}_rgb`] = rgbCanvas;
+                canvases[`${i}_depth`] = depthCanvas;
+                contexts[`${i}_rgb`] = rgbCanvas.getContext('2d');
+                contexts[`${i}_depth`] = depthCanvas.getContext('2d');
+            }
+        }
         
         function connectWebSocket() {
             ws = new WebSocket('ws://localhost:8765');
@@ -188,23 +234,51 @@
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 
-                if (data.cam1 && data.cam2) {
-                    // Draw camera 1
-                    const img1 = new Image();
-                    img1.onload = () => {
-                        ctx1.drawImage(img1, 0, 0, canvas1.width, canvas1.height);
-                    };
-                    img1.src = 'data:image/jpeg;base64,' + data.cam1;
+                if (data.cameras) {
+                    // Update camera count and create grid if needed
+                    if (data.cameras.length !== cameras.length) {
+                        cameras = data.cameras;
+                        cameraCount.textContent = cameras.length;
+                        createCameraGrid(cameras.length);
+                    }
                     
-                    // Draw camera 2
-                    const img2 = new Image();
-                    img2.onload = () => {
-                        ctx2.drawImage(img2, 0, 0, canvas2.width, canvas2.height);
-                    };
-                    img2.src = 'data:image/jpeg;base64,' + data.cam2;
+                    // Update each camera's streams
+                    data.cameras.forEach((camera, index) => {
+                        // Update camera info
+                        const infoElement = document.getElementById(`info_${index}`);
+                        if (infoElement) {
+                            infoElement.textContent = `Serial: ${camera.serial}`;
+                        }
+                        
+                        // Draw RGB stream
+                        if (canvases[`${index}_rgb`] && camera.color) {
+                            const img = new Image();
+                            img.onload = () => {
+                                contexts[`${index}_rgb`].drawImage(
+                                    img, 0, 0, 
+                                    canvases[`${index}_rgb`].width, 
+                                    canvases[`${index}_rgb`].height
+                                );
+                            };
+                            img.src = 'data:image/jpeg;base64,' + camera.color;
+                        }
+                        
+                        // Draw Depth stream
+                        if (canvases[`${index}_depth`] && camera.depth) {
+                            const img = new Image();
+                            img.onload = () => {
+                                contexts[`${index}_depth`].drawImage(
+                                    img, 0, 0, 
+                                    canvases[`${index}_depth`].width, 
+                                    canvases[`${index}_depth`].height
+                                );
+                            };
+                            img.src = 'data:image/jpeg;base64,' + camera.depth;
+                        }
+                    });
                     
                     // Update sync status
-                    const syncDiff = data.sync_diff;
+                    const syncDiff = data.sync_diff || 0;
                     syncStatus.textContent = `${syncDiff.toFixed(1)} ms`;
                     
                     if (syncDiff < 10) {
@@ -229,7 +303,7 @@
                 console.error('WebSocket error:', error);
                 connectionStatus.textContent = 'Error';
                 connectionStatus.style.color = '#f44336';
-                errorDiv.textContent = 'Connection error. Make sure the Python server is running.';
+                errorDiv.textContent = 'Connection error. Make sure the grid_camera_server.py is running.';
                 errorDiv.style.display = 'block';
             };
             
