@@ -1,6 +1,6 @@
-# RealSense D435 Synchronized Streaming
+# RealSense Multi-Camera Grid Streaming
 
-Minimum working script for synchronized streaming from two RealSense D435 cameras with web-based recording.
+Professional multi-camera RealSense D435 streaming with RGB + Depth recording in organized session structure.
 
 ## Hardware Requirements
 
@@ -59,10 +59,10 @@ python official_minimal_stream.py
 
 ### Quick Start
 
-1. **Start the multi-camera server**:
+1. **Start the grid camera server**:
    ```bash
    source .venv/bin/activate
-   python multi_camera_server.py
+   python server.py
    ```
    
    Expected output:
@@ -82,16 +82,26 @@ python official_minimal_stream.py
    - Or navigate to: `file:///path/to/your/project/index.html`
 
 3. **View live streams**:
-   - Left panel: Camera 1 (Color Stream)
-   - Right panel: Camera 2 (Depth Stream placeholder - currently shows Camera 2)
-   - Status indicators show connection and sync status
+   - **Grid layout**: Rows = cameras, Columns = RGB + Depth
+   - Each camera shows both color and depth streams side by side
+   - Status indicators show connection and synchronization
 
-4. **Record videos**:
-   - Click "Start Recording" to begin recording both cameras
+4. **Record sessions**:
+   - Click "Start Recording" to begin recording all cameras
    - Click "Stop Recording" to end recording
-   - Videos are saved to the `recordings/` folder with filenames:
-     - `camera_{serial1}_{timestamp}.mp4`
-     - `camera_{serial2}_{timestamp}.mp4`
+   - Each session creates a structured folder hierarchy:
+     ```
+     recordings/
+     └── session_20250719_143022/
+         ├── camera_250122071300/
+         │   ├── rgb.mp4           # Color video (wide compatibility)
+         │   ├── depth.npy         # Raw depth arrays (professional)
+         │   └── combined.mp4      # Side-by-side color+depth
+         └── camera_250222071931/
+             ├── rgb.mp4
+             ├── depth.npy
+             └── combined.mp4
+     ```
 
 ### Alternative: Single Camera Mode
 
@@ -103,18 +113,25 @@ This opens an OpenCV window with color + depth streams side by side.
 
 ## Features
 
-- Synchronized RGB streaming from two RealSense D435 cameras
-- Real-time web display with synchronization status indicator
-- One-click recording to configured folder
-- Automatic reconnection on connection loss
+- **Multi-camera support**: Auto-detects all connected RealSense D435 cameras
+- **Grid layout**: RGB + Depth streams displayed side-by-side for each camera
+- **Professional recording**: Three file formats per camera per session
+  - `rgb.mp4`: High-compatibility color video (mp4v codec)
+  - `depth.npy`: Raw depth arrays for professional analysis
+  - `combined.mp4`: Side-by-side visualization video
+- **Session organization**: Each recording creates a timestamped session folder
+- **Real-time synchronization**: Multi-camera sync status monitoring
+- **Automatic reconnection**: Handles connection loss gracefully
 
 ## Configuration
 
-- **Output folder**: `recordings/` (automatically created)
-- **Resolution**: 640x480 @ 30 FPS per camera
+- **Output folder**: `recordings/` (automatically created with session structure)
+- **Resolution**: 640x480 @ 30 FPS per camera (RGB + Depth)
 - **WebSocket port**: 8765
-- **Video codec**: H.264 (avc1) with XVID fallback
-- **Recording format**: Individual MP4 files per camera with serial number and timestamp
+- **RGB codec**: mp4v (wide compatibility)
+- **Combined codec**: mp4v (wide compatibility)  
+- **Depth format**: NumPy arrays (.npy) for professional use
+- **Session structure**: `session_YYYYMMDD_HHMMSS/camera_SERIAL/[rgb.mp4|depth.npy|combined.mp4]`
 
 ## Troubleshooting
 
@@ -124,6 +141,12 @@ This opens an OpenCV window with color + depth streams side by side.
 2. **"Frame didn't arrive within 5000ms"**: Replace with high-quality USB-C cable
 3. **ModuleNotFoundError**: Check for local file conflicts (rename any `pyrealsense2.py` files)
 4. **Multiple camera issues**: Test single camera first, consider lower framerate (15fps)
+
+### Known Issues
+
+- **Depth recording freeze**: `combined.mp4` may freeze after ~1 second (depth stream issue)
+- **Video compatibility**: MP4 files only open in VLC, not other players (codec limitation)
+- **Depth data**: `depth.npy` reliability under investigation
 
 For detailed troubleshooting, see `TROUBLESHOOTING.md`.
 

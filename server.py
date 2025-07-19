@@ -21,6 +21,10 @@ class GridCameraRealSenseServer:
         self.is_streaming = False
         self.is_recording = False
         self.video_writers = []
+        self.rgb_writers = []
+        self.depth_arrays = []
+        self.camera_dirs = []
+        self.session_dir = None
         self.frame_lock = Lock()
         self.latest_frames = {}
         self.connected_clients = set()
@@ -143,23 +147,32 @@ class GridCameraRealSenseServer:
                         'serial': self.camera_serials[i]
                     }
                     
-                    # Record if enabled (record color + depth side by side)
-                    if self.is_recording and i < len(self.video_writers) and self.video_writers[i]:
-                        # Create side-by-side image like official_minimal_stream.py
-                        depth_colormap_dim = depth_colormap.shape
-                        color_colormap_dim = color_image.shape
+                    # Record if enabled - save RGB, Depth, and Combined
+                    if self.is_recording and i < len(self.video_writers):
+                        # 1. Save RGB video
+                        if i < len(self.rgb_writers) and self.rgb_writers[i]:
+                            self.rgb_writers[i].write(color_image)
                         
-                        if depth_colormap_dim != color_colormap_dim:
-                            resized_color_image = cv2.resize(
-                                color_image, 
-                                dsize=(depth_colormap_dim[1], depth_colormap_dim[0]), 
-                                interpolation=cv2.INTER_AREA
-                            )
-                            combined_image = np.hstack((resized_color_image, depth_colormap))
-                        else:
-                            combined_image = np.hstack((color_image, depth_colormap))
+                        # 2. Save depth array (raw data)
+                        if i < len(self.depth_arrays):
+                            self.depth_arrays[i].append(depth_image)
                         
-                        self.video_writers[i].write(combined_image)
+                        # 3. Save combined side-by-side video
+                        if self.video_writers[i]:
+                            depth_colormap_dim = depth_colormap.shape
+                            color_colormap_dim = color_image.shape
+                            
+                            if depth_colormap_dim != color_colormap_dim:
+                                resized_color_image = cv2.resize(
+                                    color_image, 
+                                    dsize=(depth_colormap_dim[1], depth_colormap_dim[0]), 
+                                    interpolation=cv2.INTER_AREA
+                                )
+                                combined_image = np.hstack((resized_color_image, depth_colormap))
+                            else:
+                                combined_image = np.hstack((color_image, depth_colormap))
+                            
+                            self.video_writers[i].write(combined_image)
                     
                     # Reset timeout counter on success
                     timeout_counts[i] = 0
@@ -183,52 +196,88 @@ class GridCameraRealSenseServer:
             time.sleep(1/60)  # 60 FPS max
     
     def start_recording(self):
-        """Start video recording for all cameras"""
+        """Start video recording for all cameras with session-based structure"""
         if self.is_recording:
             return []
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filenames = []
+        # Create session folder
+        session_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_dir = os.path.join(self.recordings_dir, f"session_{session_timestamp}")
+        os.makedirs(self.session_dir, exist_ok=True)
+        
         self.video_writers = []
+        self.rgb_writers = []
+        self.depth_arrays = []
+        self.camera_dirs = []
         
         for i, serial in enumerate(self.camera_serials):
-            filename = os.path.join(self.recordings_dir, f"camera_{serial}_{timestamp}.mp4")
+            # Create camera folder
+            camera_dir = os.path.join(self.session_dir, f"camera_{serial}")
+            os.makedirs(camera_dir, exist_ok=True)
+            self.camera_dirs.append(camera_dir)
             
-            # Use H.264 codec for better compatibility
-            # Video will be side-by-side color + depth, so width is 1280
-            fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264
-            try:
-                writer = cv2.VideoWriter(filename, fourcc, 30.0, (1280, 480))
-                if not writer.isOpened():
-                    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-                    writer = cv2.VideoWriter(filename, fourcc, 30.0, (1280, 480))
-            except:
-                fourcc = cv2.VideoWriter_fourcc(*'XVID')
-                writer = cv2.VideoWriter(filename, fourcc, 30.0, (1280, 480))
+            # Initialize file paths
+            rgb_file = os.path.join(camera_dir, "rgb.mp4")
+            combined_file = os.path.join(camera_dir, "combined.mp4")
+            depth_file = os.path.join(camera_dir, "depth.npy")
             
-            self.video_writers.append(writer)
-            filenames.append(filename)
+            # RGB video writer with better codec compatibility
+            rgb_fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # More compatible than avc1
+            rgb_writer = cv2.VideoWriter(rgb_file, rgb_fourcc, 30.0, (640, 480))
+            
+            # Combined (side-by-side) video writer  
+            combined_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            combined_writer = cv2.VideoWriter(combined_file, combined_fourcc, 30.0, (1280, 480))
+            
+            # Depth array storage
+            depth_array = []
+            
+            self.rgb_writers.append(rgb_writer)
+            self.video_writers.append(combined_writer)  # Keep for compatibility
+            self.depth_arrays.append(depth_array)
+            
+            print(f"  Camera {serial}: {camera_dir}")
         
         self.is_recording = True
-        print(f"Recording started for {len(filenames)} camera(s):")
-        for f in filenames:
-            print(f"  {f}")
+        print(f"Recording session started: {self.session_dir}")
         
-        return filenames
+        return [self.session_dir]
     
     def stop_recording(self):
-        """Stop video recording for all cameras"""
+        """Stop video recording for all cameras and save depth arrays"""
         if not self.is_recording:
             return
         
         self.is_recording = False
         
+        # Release video writers
         for i, writer in enumerate(self.video_writers):
             if writer:
                 writer.release()
         
+        for i, writer in enumerate(self.rgb_writers):
+            if writer:
+                writer.release()
+        
+        # Save depth arrays as numpy files
+        for i, depth_array in enumerate(self.depth_arrays):
+            if depth_array and i < len(self.camera_dirs):
+                depth_file = os.path.join(self.camera_dirs[i], "depth.npy")
+                depth_stack = np.stack(depth_array, axis=0)  # Shape: (frames, height, width)
+                np.save(depth_file, depth_stack)
+                print(f"  Saved depth data: {depth_file} (shape: {depth_stack.shape})")
+        
+        # Clear arrays
         self.video_writers = []
-        print("Recording stopped for all cameras")
+        self.rgb_writers = []
+        self.depth_arrays = []
+        self.camera_dirs = []
+        
+        print(f"Recording session completed: {self.session_dir}")
+        print("Files saved per camera:")
+        print("  - rgb.mp4 (color video)")  
+        print("  - depth.npy (raw depth arrays)")
+        print("  - combined.mp4 (side-by-side color+depth)")
     
     async def handle_client(self, websocket):
         """Handle WebSocket client connection"""
