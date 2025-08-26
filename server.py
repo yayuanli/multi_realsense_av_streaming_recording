@@ -12,6 +12,9 @@ from datetime import datetime
 import os
 from threading import Thread, Lock
 import time
+import sounddevice as sd
+import wave
+import queue
 
 class GridCameraRealSenseServer:
     def __init__(self):
@@ -23,6 +26,7 @@ class GridCameraRealSenseServer:
         self.video_writers = []
         self.rgb_writers = []
         self.depth_arrays = []
+        self.depth_writers = []  # Add depth video writers
         self.camera_dirs = []
         self.session_dir = None
         self.frame_lock = Lock()
@@ -30,6 +34,14 @@ class GridCameraRealSenseServer:
         self.connected_clients = set()
         self.frame_count = 0
         self.recordings_dir = "recordings"
+        
+        # Audio capture
+        self.audio_queue = queue.Queue()
+        self.audio_data = []
+        self.audio_file = None
+        self.audio_sample_rate = 44100
+        self.audio_channels = 2
+        self.is_audio_streaming = False
         
         # Ensure recordings directory exists
         os.makedirs(self.recordings_dir, exist_ok=True)
@@ -101,6 +113,53 @@ class GridCameraRealSenseServer:
         
         print(f"\nSuccessfully initialized {len(self.pipelines)} camera(s)")
         
+        # Initialize audio
+        self.initialize_audio()
+        
+    def initialize_audio(self):
+        """Initialize system audio capture"""
+        try:
+            # Check available audio devices
+            devices = sd.query_devices()
+            default_input = sd.default.device[0]
+            
+            print(f"\nAudio: Using device {default_input}")
+            print(f"  {devices[default_input]['name']}")
+            print(f"  Sample rate: {self.audio_sample_rate}Hz, Channels: {self.audio_channels}")
+            
+        except Exception as e:
+            print(f"Audio initialization warning: {e}")
+            print("Audio capture may not work properly")
+    
+    def audio_callback(self, indata, frames, time, status):
+        """Callback for audio capture"""
+        if status:
+            print(f"Audio status: {status}")
+        
+        # Add to queue for streaming
+        if self.is_audio_streaming:
+            self.audio_queue.put(indata.copy())
+        
+        # Add to recording buffer
+        if self.is_recording:
+            self.audio_data.extend(indata.flatten())
+    
+    def capture_audio(self):
+        """Start audio capture thread"""
+        try:
+            self.is_audio_streaming = True
+            with sd.InputStream(
+                samplerate=self.audio_sample_rate,
+                channels=self.audio_channels,
+                callback=self.audio_callback,
+                blocksize=1024
+            ):
+                print("Audio capture started")
+                while self.is_audio_streaming:
+                    time.sleep(0.1)
+        except Exception as e:
+            print(f"Audio capture error: {e}")
+        
     def capture_frames(self):
         """Continuously capture RGB + Depth frames from all cameras"""
         print("Starting frame capture thread...")
@@ -153,9 +212,9 @@ class GridCameraRealSenseServer:
                         if i < len(self.rgb_writers) and self.rgb_writers[i]:
                             self.rgb_writers[i].write(color_image)
                         
-                        # 2. Save depth array (raw data)
-                        if i < len(self.depth_arrays):
-                            self.depth_arrays[i].append(depth_image)
+                        # 2. Save depth video (colormap)
+                        if i < len(self.depth_writers) and self.depth_writers[i]:
+                            self.depth_writers[i].write(depth_colormap)
                         
                         # 3. Save combined side-by-side video
                         if self.video_writers[i]:
@@ -208,7 +267,14 @@ class GridCameraRealSenseServer:
         self.video_writers = []
         self.rgb_writers = []
         self.depth_arrays = []
+        self.depth_writers = []
         self.camera_dirs = []
+        
+        # Create audio folder
+        audio_dir = os.path.join(self.session_dir, "audio_system")
+        os.makedirs(audio_dir, exist_ok=True)
+        self.audio_file = os.path.join(audio_dir, "audio.wav")
+        self.audio_data = []  # Reset audio buffer
         
         for i, serial in enumerate(self.camera_serials):
             # Create camera folder
@@ -219,7 +285,7 @@ class GridCameraRealSenseServer:
             # Initialize file paths
             rgb_file = os.path.join(camera_dir, "rgb.mp4")
             combined_file = os.path.join(camera_dir, "combined.mp4")
-            depth_file = os.path.join(camera_dir, "depth.npy")
+            depth_file = os.path.join(camera_dir, "depth.mp4")
             
             # RGB video writer with better codec compatibility
             rgb_fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # More compatible than avc1
@@ -229,12 +295,17 @@ class GridCameraRealSenseServer:
             combined_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             combined_writer = cv2.VideoWriter(combined_file, combined_fourcc, 30.0, (1280, 480))
             
-            # Depth array storage
+            # Depth video writer - save depth colormap as video
+            depth_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            depth_writer = cv2.VideoWriter(depth_file, depth_fourcc, 30.0, (640, 480))
+            
+            # Keep empty array for compatibility (we'll save raw depth separately)
             depth_array = []
             
             self.rgb_writers.append(rgb_writer)
             self.video_writers.append(combined_writer)  # Keep for compatibility
             self.depth_arrays.append(depth_array)
+            self.depth_writers.append(depth_writer)
             
             print(f"  Camera {serial}: {camera_dir}")
         
@@ -259,24 +330,45 @@ class GridCameraRealSenseServer:
             if writer:
                 writer.release()
         
-        # Save depth arrays as numpy files
-        for i, depth_array in enumerate(self.depth_arrays):
-            if depth_array and i < len(self.camera_dirs):
-                depth_file = os.path.join(self.camera_dirs[i], "depth.npy")
-                depth_stack = np.stack(depth_array, axis=0)  # Shape: (frames, height, width)
-                np.save(depth_file, depth_stack)
-                print(f"  Saved depth data: {depth_file} (shape: {depth_stack.shape})")
+        for i, writer in enumerate(self.depth_writers):
+            if writer:
+                writer.release()
+        
+        # Save audio file
+        if self.audio_data and self.audio_file:
+            try:
+                audio_array = np.array(self.audio_data, dtype=np.float32)
+                # Reshape for stereo
+                if len(audio_array) % 2 == 0:
+                    audio_array = audio_array.reshape(-1, 2)
+                else:
+                    audio_array = audio_array[:-1].reshape(-1, 2)
+                
+                # Save as WAV
+                with wave.open(self.audio_file, 'w') as wav_file:
+                    wav_file.setnchannels(self.audio_channels)
+                    wav_file.setsampwidth(2)  # 16-bit
+                    wav_file.setframerate(self.audio_sample_rate)
+                    # Convert float32 to int16
+                    audio_int16 = (audio_array * 32767).astype(np.int16)
+                    wav_file.writeframes(audio_int16.tobytes())
+                
+                print(f"  Saved audio: {self.audio_file} ({len(self.audio_data)} samples)")
+            except Exception as e:
+                print(f"  Audio save error: {e}")
         
         # Clear arrays
         self.video_writers = []
         self.rgb_writers = []
         self.depth_arrays = []
+        self.depth_writers = []
         self.camera_dirs = []
+        self.audio_data = []
         
         print(f"Recording session completed: {self.session_dir}")
         print("Files saved per camera:")
         print("  - rgb.mp4 (color video)")  
-        print("  - depth.npy (raw depth arrays)")
+        print("  - depth.mp4 (depth colormap video)")
         print("  - combined.mp4 (side-by-side color+depth)")
     
     async def handle_client(self, websocket):
@@ -323,13 +415,28 @@ class GridCameraRealSenseServer:
                 timestamps = [frame['timestamp'] for frame in frames.values()]
                 sync_diff = (max(timestamps) - min(timestamps)) * 1000 if len(timestamps) > 1 else 0.0
                 
+                # Get audio data if available
+                audio_data = None
+                if not self.audio_queue.empty():
+                    try:
+                        audio_chunk = self.audio_queue.get_nowait()
+                        # Convert to simple amplitude for visualization
+                        audio_amplitude = np.max(np.abs(audio_chunk)) if len(audio_chunk) > 0 else 0.0
+                        audio_data = {
+                            'amplitude': float(audio_amplitude),
+                            'timestamp': time.time()
+                        }
+                    except:
+                        pass
+                
                 # Create message with camera grid data
                 message = {
                     'is_recording': self.is_recording,
                     'frame_number': self.frame_count,
                     'sync_diff': sync_diff,
                     'num_cameras': len(frames),
-                    'cameras': []
+                    'cameras': [],
+                    'audio': audio_data
                 }
                 
                 # Add each camera's RGB + Depth data
@@ -368,6 +475,10 @@ class GridCameraRealSenseServer:
         capture_thread = Thread(target=self.capture_frames, daemon=True)
         capture_thread.start()
         
+        # Start audio capture thread
+        audio_thread = Thread(target=self.capture_audio, daemon=True)
+        audio_thread.start()
+        
         # Start WebSocket server and frame broadcaster
         server = await websockets.serve(self.handle_client, host, port)
         print(f"WebSocket server running on ws://{host}:{port}")
@@ -380,6 +491,7 @@ class GridCameraRealSenseServer:
         """Clean up resources"""
         print("Cleaning up...")
         self.is_streaming = False
+        self.is_audio_streaming = False
         self.stop_recording()
         
         for pipeline in self.pipelines:

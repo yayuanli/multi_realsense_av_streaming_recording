@@ -3,3 +3,4 @@ numpy
 opencv-python
 websockets
 asyncio
+sounddevice

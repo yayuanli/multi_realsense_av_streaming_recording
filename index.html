@@ -215,6 +215,24 @@
                 contexts[`${i}_rgb`] = rgbCanvas.getContext('2d');
                 contexts[`${i}_depth`] = depthCanvas.getContext('2d');
             }
+            
+            // Add audio row (spans both columns)
+            const audioCell = document.createElement('div');
+            audioCell.className = 'camera-cell';
+            audioCell.style.gridColumn = 'span 2';
+            audioCell.innerHTML = `
+                <h3>System Audio</h3>
+                <div class="camera-label">Audio Level</div>
+                <canvas id="canvas_audio" width="640" height="100"></canvas>
+                <div class="camera-info" id="info_audio">Amplitude: 0.00</div>
+            `;
+            
+            cameraGrid.appendChild(audioCell);
+            
+            // Store audio canvas reference
+            const audioCanvas = document.getElementById('canvas_audio');
+            canvases['audio'] = audioCanvas;
+            contexts['audio'] = audioCanvas.getContext('2d');
         }
         
         function connectWebSocket() {
@@ -292,6 +310,36 @@
                     // Update recording status
                     isRecording = data.is_recording;
                     updateRecordingUI();
+                }
+                
+                // Update audio visualization
+                if (data.audio && canvases['audio']) {
+                    const canvas = canvases['audio'];
+                    const ctx = contexts['audio'];
+                    const amplitude = data.audio.amplitude || 0;
+                    
+                    // Clear canvas
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    
+                    // Draw audio level bar
+                    const barWidth = (amplitude * canvas.width);
+                    const barHeight = 30;
+                    const x = 0;
+                    const y = (canvas.height - barHeight) / 2;
+                    
+                    // Background
+                    ctx.fillStyle = '#e0e0e0';
+                    ctx.fillRect(0, y, canvas.width, barHeight);
+                    
+                    // Audio level
+                    ctx.fillStyle = amplitude > 0.5 ? '#f44336' : amplitude > 0.2 ? '#ff9800' : '#4CAF50';
+                    ctx.fillRect(x, y, barWidth, barHeight);
+                    
+                    // Update info
+                    const infoElement = document.getElementById('info_audio');
+                    if (infoElement) {
+                        infoElement.textContent = `Amplitude: ${amplitude.toFixed(3)}`;
+                    }
                 }
                 
                 if (data.status) {
