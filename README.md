@@ -82,8 +82,9 @@ python official_minimal_stream.py
    - Or navigate to: `file:///path/to/your/project/index.html`
 
 3. **View live streams**:
-   - **Grid layout**: Rows = cameras, Columns = RGB + Depth
+   - **Grid layout**: Rows = cameras + audio, Columns = RGB + Depth
    - Each camera shows both color and depth streams side by side
+   - System audio visualization displayed as bottom row
    - Status indicators show connection and synchronization
 
 4. **Record sessions**:
@@ -93,6 +94,8 @@ python official_minimal_stream.py
      ```
      recordings/
      └── session_20250719_143022/
+         ├── audio_system/
+         │   └── audio.wav         # System audio recording
          ├── camera_250122071300/
          │   ├── rgb.mp4           # Color video (wide compatibility)
          │   ├── depth.npy         # Raw depth arrays (professional)
@@ -115,10 +118,12 @@ This opens an OpenCV window with color + depth streams side by side.
 
 - **Multi-camera support**: Auto-detects all connected RealSense D435 cameras
 - **Grid layout**: RGB + Depth streams displayed side-by-side for each camera
-- **Professional recording**: Three file formats per camera per session
+- **System audio capture**: Real-time audio visualization and recording
+- **Professional recording**: Three file formats per camera + audio per session
   - `rgb.mp4`: High-compatibility color video (mp4v codec)
   - `depth.npy`: Raw depth arrays for professional analysis
   - `combined.mp4`: Side-by-side visualization video
+  - `audio.wav`: System audio recording (stereo 44.1kHz)
 - **Session organization**: Each recording creates a timestamped session folder
 - **Real-time synchronization**: Multi-camera sync status monitoring
 - **Automatic reconnection**: Handles connection loss gracefully
@@ -131,7 +136,7 @@ This opens an OpenCV window with color + depth streams side by side.
 - **RGB codec**: mp4v (wide compatibility)
 - **Combined codec**: mp4v (wide compatibility)  
 - **Depth format**: NumPy arrays (.npy) for professional use
-- **Session structure**: `session_YYYYMMDD_HHMMSS/camera_SERIAL/[rgb.mp4|depth.npy|combined.mp4]`
+- **Session structure**: `session_YYYYMMDD_HHMMSS/[camera_SERIAL|audio_system]/[rgb.mp4|depth.npy|combined.mp4|audio.wav]`
 
 ## Troubleshooting
 
